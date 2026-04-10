@@ -19,7 +19,21 @@ if not os.path.exists(PHOTO_DIR):
 waiting_for_photo = {}
 menu_state = {}
 
-# -------------------- DATA SAVE / LOAD --------------------
+# ഇവിടെ നിന്റെ channels set ചെയ്യണം
+CHANNELS = {
+    "channel1": {
+        "name": "Channel 1",
+        "chat_id": "@your_channel_username1"   # private ആണെങ്കിൽ -100...
+    },
+    "channel2": {
+        "name": "Channel 2",
+        "chat_id": "@your_channel_username2"
+    },
+    "channel3": {
+        "name": "Channel 3",
+        "chat_id": "@your_channel_username3"
+    }
+}
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -27,7 +41,7 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except:
         return {}
 
 def save_data(data):
@@ -41,58 +55,64 @@ def ensure_user(user_id):
     if user_id not in db:
         db[user_id] = {
             "photos": {},
-            "active_photo": None
+            "active_photo": None,
+            "selected_channels": []
         }
         save_data(db)
     return user_id
 
-# -------------------- MENUS --------------------
-
 def main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📸 Set Photo")
-    markup.row("✅ Use Photo")
-    return markup
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row("📸 Set Photo", "✅ Use Photo")
+    m.row("📢 Auto Forward Channel")
+    m.row("📋 Current Channels")
+    return m
 
 def photo_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("Photo 1", "Photo 2")
-    markup.row("Photo 3", "Photo 4")
-    markup.row("Photo 5")
-    markup.row("⬅️ Back")
-    return markup
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row("Photo 1", "Photo 2")
+    m.row("Photo 3", "Photo 4")
+    m.row("Photo 5")
+    m.row("⬅️ Back")
+    return m
 
-# -------------------- FLASK --------------------
+def channel_menu():
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row("Channel 1", "Channel 2")
+    m.row("Channel 3")
+    m.row("❌ Remove Channel 1", "❌ Remove Channel 2")
+    m.row("❌ Remove Channel 3")
+    m.row("🗑 Remove All Channels")
+    m.row("⬅️ Back")
+    return m
 
 @app.route("/")
 def home():
     return "Bot is running!"
 
-# -------------------- BOT COMMANDS --------------------
-
 @bot.message_handler(commands=["start"])
 def start(message):
     user_id = ensure_user(message.from_user.id)
-    active = db[user_id].get("active_photo")
+    active = db[user_id].get("active_photo") or "None"
 
-    if active:
-        active_text = f"\nCurrent active: {active.upper()}"
-    else:
-        active_text = "\nCurrent active: None"
+    selected = db[user_id].get("selected_channels", [])
+    names = []
+    for ch in selected:
+        if ch in CHANNELS:
+            names.append(CHANNELS[ch]["name"])
+    channel_text = ", ".join(names) if names else "None"
 
     bot.send_message(
         message.chat.id,
-        "✅ Bot Ready\n\n"
-        "1. 📸 Set Photo അമർത്തൂ\n"
-        "2. Photo 1 മുതൽ 5 വരെ ഒരു slot select ചെയ്യൂ\n"
-        "3. ശേഷം photo അയച്ചാൽ save ചെയ്യും\n"
-        "4. ✅ Use Photo ഉപയോഗിച്ച് active photo select ചെയ്യൂ\n"
-        "5. ഇനി photo + text + link അയച്ചാൽ photo replace ചെയ്യും"
-        + active_text,
+        f"🔥 Bot Ready\n\nActive Photo: {active}\nChannels: {channel_text}",
         reply_markup=main_menu()
     )
 
-# -------------------- TEXT BUTTON HANDLER --------------------
+@bot.channel_post_handler(content_types=['text', 'photo', 'video'])
+def detect_channel(message):
+    print("🔥 CHANNEL DETECTED 🔥")
+    print("ID =", message.chat.id)
+    print("TITLE =", message.chat.title)
 
 @bot.message_handler(func=lambda m: m.content_type == "text")
 def handle_text(message):
@@ -101,77 +121,86 @@ def handle_text(message):
 
     if text == "📸 Set Photo":
         menu_state[user_id] = "set"
-        bot.send_message(
-            message.chat.id,
-            "📸 ഏത് slot-il photo save ചെയ്യണം?",
-            reply_markup=photo_menu()
-        )
+        bot.send_message(message.chat.id, "Select slot", reply_markup=photo_menu())
         return
 
     if text == "✅ Use Photo":
         menu_state[user_id] = "use"
+        bot.send_message(message.chat.id, "Select photo", reply_markup=photo_menu())
+        return
+
+    if text == "📢 Auto Forward Channel":
+        menu_state[user_id] = "channel"
+        bot.send_message(message.chat.id, "Select channel(s)", reply_markup=channel_menu())
+        return
+
+    if text == "📋 Current Channels":
+        selected = db[user_id].get("selected_channels", [])
+        if not selected:
+            bot.send_message(message.chat.id, "No channels selected", reply_markup=main_menu())
+            return
+
+        names = []
+        for ch in selected:
+            if ch in CHANNELS:
+                names.append(CHANNELS[ch]["name"])
+
         bot.send_message(
             message.chat.id,
-            "✅ ഏത് photo active ആക്കണം?",
-            reply_markup=photo_menu()
+            "Selected Channels:\n\n" + "\n".join(names),
+            reply_markup=main_menu()
         )
+        return
+
+    if text == "🗑 Remove All Channels":
+        db[user_id]["selected_channels"] = []
+        save_data(db)
+        bot.send_message(message.chat.id, "All channels removed", reply_markup=channel_menu())
         return
 
     if text == "⬅️ Back":
-        menu_state.pop(user_id, None)
-        bot.send_message(
-            message.chat.id,
-            "🏠 Main menu",
-            reply_markup=main_menu()
-        )
+        bot.send_message(message.chat.id, "Main Menu", reply_markup=main_menu())
         return
 
-    if text in ["Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5"]:
+    if text.startswith("Photo"):
         num = text.split()[-1]
         slot = f"photo{num}"
-        current_mode = menu_state.get(user_id)
+        mode = menu_state.get(user_id)
 
-        if current_mode == "set":
+        if mode == "set":
             waiting_for_photo[user_id] = slot
-            bot.send_message(
-                message.chat.id,
-                f"📸 ഇനി {text} ആയി save ചെയ്യാനുള്ള photo അയക്കൂ",
-                reply_markup=photo_menu()
-            )
+            bot.send_message(message.chat.id, "Send photo now")
             return
 
-        if current_mode == "use":
+        if mode == "use":
             if slot in db[user_id]["photos"]:
                 db[user_id]["active_photo"] = slot
                 save_data(db)
-                bot.send_message(
-                    message.chat.id,
-                    f"✅ {text} active ആയി set ചെയ്തു",
-                    reply_markup=main_menu()
-                )
+                bot.send_message(message.chat.id, "Photo selected", reply_markup=main_menu())
             else:
-                bot.send_message(
-                    message.chat.id,
-                    f"❌ {text} save ചെയ്തിട്ടില്ല.\nആദ്യം Set Photo ഉപയോഗിക്കൂ.",
-                    reply_markup=photo_menu()
-                )
+                bot.send_message(message.chat.id, "Not saved")
             return
 
-        bot.send_message(
-            message.chat.id,
-            "❌ ആദ്യം 📸 Set Photo അല്ലെങ്കിൽ ✅ Use Photo അമർത്തൂ",
-            reply_markup=main_menu()
-        )
+    if text in ["Channel 1", "Channel 2", "Channel 3"]:
+        key = text.lower().replace(" ", "")
+
+        if key not in db[user_id]["selected_channels"]:
+            db[user_id]["selected_channels"].append(key)
+            save_data(db)
+            bot.send_message(message.chat.id, f"{text} added", reply_markup=channel_menu())
+        else:
+            bot.send_message(message.chat.id, f"{text} already selected", reply_markup=channel_menu())
         return
 
-    if not text.startswith("/"):
-        bot.send_message(
-            message.chat.id,
-            "📌 താഴെയുള്ള buttons use ചെയ്യൂ",
-            reply_markup=main_menu()
-        )
-
-# -------------------- PHOTO HANDLER --------------------
+    if text in ["❌ Remove Channel 1", "❌ Remove Channel 2", "❌ Remove Channel 3"]:
+        key = text.replace("❌ Remove ", "").lower().replace(" ", "")
+        if key in db[user_id]["selected_channels"]:
+            db[user_id]["selected_channels"].remove(key)
+            save_data(db)
+            bot.send_message(message.chat.id, f"{key.upper()} removed", reply_markup=channel_menu())
+        else:
+            bot.send_message(message.chat.id, "Channel not selected", reply_markup=channel_menu())
+        return
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
@@ -181,80 +210,60 @@ def handle_photo(message):
     if user_id in waiting_for_photo:
         slot = waiting_for_photo[user_id]
 
-        try:
-            file_info = bot.get_file(message.photo[-1].file_id)
-            downloaded_file = bot.download_file(file_info.file_path)
+        file = bot.get_file(message.photo[-1].file_id)
+        data = bot.download_file(file.file_path)
 
-            filename = os.path.join(PHOTO_DIR, f"{user_id}_{slot}.jpg")
-            with open(filename, "wb") as f:
-                f.write(downloaded_file)
+        path = f"{PHOTO_DIR}/{user_id}_{slot}.jpg"
+        with open(path, "wb") as f:
+            f.write(data)
 
-            db[user_id]["photos"][slot] = filename
+        db[user_id]["photos"][slot] = path
 
-            if not db[user_id]["active_photo"]:
-                db[user_id]["active_photo"] = slot
+        if not db[user_id]["active_photo"]:
+            db[user_id]["active_photo"] = slot
 
-            save_data(db)
-            waiting_for_photo.pop(user_id, None)
+        save_data(db)
+        waiting_for_photo.pop(user_id)
 
-            bot.send_message(
-                message.chat.id,
-                f"✅ {slot.upper()} saved ചെയ്തു",
-                reply_markup=main_menu()
-            )
-            return
-
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                f"❌ Save error: {e}",
-                reply_markup=main_menu()
-            )
-            return
-
-    # Replace mode
-    active_slot = db[user_id].get("active_photo")
-
-    if not active_slot:
-        bot.send_message(
-            message.chat.id,
-            "❌ ആദ്യം ✅ Use Photo ഉപയോഗിച്ച് photo select ചെയ്യൂ",
-            reply_markup=main_menu()
-        )
+        bot.send_message(message.chat.id, "Saved", reply_markup=main_menu())
         return
 
-    photo_path = db[user_id]["photos"].get(active_slot)
+    # Replace mode
+    slot = db[user_id]["active_photo"]
 
-    if not photo_path or not os.path.exists(photo_path):
-        bot.send_message(
-            message.chat.id,
-            "❌ Active photo കിട്ടിയില്ല. വീണ്ടും set ചെയ്യൂ",
-            reply_markup=main_menu()
-        )
+    if not slot:
+        bot.send_message(message.chat.id, "Select photo first")
+        return
+
+    path = db[user_id]["photos"].get(slot)
+
+    if not path or not os.path.exists(path):
+        bot.send_message(message.chat.id, "Photo missing")
         return
 
     caption = message.caption or ""
 
-    try:
-        with open(photo_path, "rb") as img:
-            bot.send_photo(
-                chat_id=message.chat.id,
-                photo=img,
-                caption=caption,
-                reply_markup=main_menu()
-            )
-    except Exception as e:
-        bot.send_message(
-            message.chat.id,
-            f"❌ Replace error: {e}",
-            reply_markup=main_menu()
-        )
+    # user-ne reply
+    with open(path, "rb") as img:
+        bot.send_photo(message.chat.id, img, caption=caption)
 
-# -------------------- BOT RUN --------------------
+    # multiple channel forward
+    selected_channels = db[user_id].get("selected_channels", [])
+
+    for ch in selected_channels:
+        if ch in CHANNELS:
+            try:
+                with open(path, "rb") as img:
+                    bot.send_photo(CHANNELS[ch]["chat_id"], img, caption=caption)
+            except Exception as e:
+                bot.send_message(
+                    message.chat.id,
+                    f"{CHANNELS[ch]['name']} error: {e}"
+                )
 
 def run_bot():
     print("Bot running...")
-    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=20)
+    bot.infinity_polling(skip_pending=True)
 
 if __name__ == "__main__":
     threading.Thread(target=run_bot, daemon=True).start()
