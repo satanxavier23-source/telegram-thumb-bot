@@ -19,19 +19,18 @@ if not os.path.exists(PHOTO_DIR):
 waiting_for_photo = {}
 menu_state = {}
 
-# ഇവിടെ നിന്റെ channels set ചെയ്യണം
 CHANNELS = {
     "channel1": {
         "name": "Channel 1",
-        "chat_id": "@your_channel_username1"   # private ആണെങ്കിൽ -100...
+        "chat_id": -1002674664027
     },
     "channel2": {
         "name": "Channel 2",
-        "chat_id": "@your_channel_username2"
+        "chat_id": -1002514181198
     },
     "channel3": {
         "name": "Channel 3",
-        "chat_id": "@your_channel_username3"
+        "chat_id": -1002427180742
     }
 }
 
@@ -41,7 +40,7 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 def save_data(data):
@@ -60,6 +59,13 @@ def ensure_user(user_id):
         }
         save_data(db)
     return user_id
+
+def get_selected_channel_names(user_id):
+    names = []
+    for ch in db[user_id].get("selected_channels", []):
+        if ch in CHANNELS:
+            names.append(CHANNELS[ch]["name"])
+    return names
 
 def main_menu():
     m = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -94,17 +100,12 @@ def home():
 def start(message):
     user_id = ensure_user(message.from_user.id)
     active = db[user_id].get("active_photo") or "None"
-
-    selected = db[user_id].get("selected_channels", [])
-    names = []
-    for ch in selected:
-        if ch in CHANNELS:
-            names.append(CHANNELS[ch]["name"])
-    channel_text = ", ".join(names) if names else "None"
+    channels = get_selected_channel_names(user_id)
+    channel_text = ", ".join(channels) if channels else "None"
 
     bot.send_message(
         message.chat.id,
-        f"🔥 Bot Ready\n\nActive Photo: {active}\nChannels: {channel_text}",
+        f"✅ Bot Ready\n\nActive Photo: {active}\nSelected Channels: {channel_text}",
         reply_markup=main_menu()
     )
 
@@ -131,25 +132,25 @@ def handle_text(message):
 
     if text == "📢 Auto Forward Channel":
         menu_state[user_id] = "channel"
-        bot.send_message(message.chat.id, "Select channel(s)", reply_markup=channel_menu())
+        names = get_selected_channel_names(user_id)
+        current = ", ".join(names) if names else "None"
+        bot.send_message(
+            message.chat.id,
+            f"Select channel(s)\nCurrent: {current}",
+            reply_markup=channel_menu()
+        )
         return
 
     if text == "📋 Current Channels":
-        selected = db[user_id].get("selected_channels", [])
-        if not selected:
+        names = get_selected_channel_names(user_id)
+        if not names:
             bot.send_message(message.chat.id, "No channels selected", reply_markup=main_menu())
-            return
-
-        names = []
-        for ch in selected:
-            if ch in CHANNELS:
-                names.append(CHANNELS[ch]["name"])
-
-        bot.send_message(
-            message.chat.id,
-            "Selected Channels:\n\n" + "\n".join(names),
-            reply_markup=main_menu()
-        )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "Selected Channels:\n\n" + "\n".join(f"✅ {name}" for name in names),
+                reply_markup=main_menu()
+            )
         return
 
     if text == "🗑 Remove All Channels":
@@ -159,6 +160,7 @@ def handle_text(message):
         return
 
     if text == "⬅️ Back":
+        menu_state.pop(user_id, None)
         bot.send_message(message.chat.id, "Main Menu", reply_markup=main_menu())
         return
 
@@ -176,9 +178,9 @@ def handle_text(message):
             if slot in db[user_id]["photos"]:
                 db[user_id]["active_photo"] = slot
                 save_data(db)
-                bot.send_message(message.chat.id, "Photo selected", reply_markup=main_menu())
+                bot.send_message(message.chat.id, f"{text} selected", reply_markup=main_menu())
             else:
-                bot.send_message(message.chat.id, "Not saved")
+                bot.send_message(message.chat.id, f"{text} not saved", reply_markup=photo_menu())
             return
 
     if text in ["Channel 1", "Channel 2", "Channel 3"]:
@@ -187,9 +189,19 @@ def handle_text(message):
         if key not in db[user_id]["selected_channels"]:
             db[user_id]["selected_channels"].append(key)
             save_data(db)
-            bot.send_message(message.chat.id, f"{text} added", reply_markup=channel_menu())
+            names = get_selected_channel_names(user_id)
+            bot.send_message(
+                message.chat.id,
+                f"✅ {text} selected\n\nCurrent: {', '.join(names)}",
+                reply_markup=channel_menu()
+            )
         else:
-            bot.send_message(message.chat.id, f"{text} already selected", reply_markup=channel_menu())
+            names = get_selected_channel_names(user_id)
+            bot.send_message(
+                message.chat.id,
+                f"⚠️ {text} already selected\n\nCurrent: {', '.join(names)}",
+                reply_markup=channel_menu()
+            )
         return
 
     if text in ["❌ Remove Channel 1", "❌ Remove Channel 2", "❌ Remove Channel 3"]:
@@ -197,69 +209,95 @@ def handle_text(message):
         if key in db[user_id]["selected_channels"]:
             db[user_id]["selected_channels"].remove(key)
             save_data(db)
-            bot.send_message(message.chat.id, f"{key.upper()} removed", reply_markup=channel_menu())
+            names = get_selected_channel_names(user_id)
+            current = ", ".join(names) if names else "None"
+            bot.send_message(
+                message.chat.id,
+                f"✅ {key.upper()} removed\n\nCurrent: {current}",
+                reply_markup=channel_menu()
+            )
         else:
             bot.send_message(message.chat.id, "Channel not selected", reply_markup=channel_menu())
         return
+
+    if not text.startswith("/"):
+        bot.send_message(message.chat.id, "Use buttons below", reply_markup=main_menu())
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     user_id = ensure_user(message.from_user.id)
 
-    # Save mode
     if user_id in waiting_for_photo:
         slot = waiting_for_photo[user_id]
 
-        file = bot.get_file(message.photo[-1].file_id)
-        data = bot.download_file(file.file_path)
+        try:
+            file = bot.get_file(message.photo[-1].file_id)
+            data = bot.download_file(file.file_path)
 
-        path = f"{PHOTO_DIR}/{user_id}_{slot}.jpg"
-        with open(path, "wb") as f:
-            f.write(data)
+            path = f"{PHOTO_DIR}/{user_id}_{slot}.jpg"
+            with open(path, "wb") as f:
+                f.write(data)
 
-        db[user_id]["photos"][slot] = path
+            db[user_id]["photos"][slot] = path
 
-        if not db[user_id]["active_photo"]:
-            db[user_id]["active_photo"] = slot
+            if not db[user_id]["active_photo"]:
+                db[user_id]["active_photo"] = slot
 
-        save_data(db)
-        waiting_for_photo.pop(user_id)
+            save_data(db)
+            waiting_for_photo.pop(user_id)
 
-        bot.send_message(message.chat.id, "Saved", reply_markup=main_menu())
-        return
+            bot.send_message(message.chat.id, f"{slot.upper()} saved", reply_markup=main_menu())
+            return
 
-    # Replace mode
-    slot = db[user_id]["active_photo"]
+        except Exception as e:
+            bot.send_message(message.chat.id, f"Save error: {e}", reply_markup=main_menu())
+            return
 
+    slot = db[user_id].get("active_photo")
     if not slot:
-        bot.send_message(message.chat.id, "Select photo first")
+        bot.send_message(message.chat.id, "Select photo first", reply_markup=main_menu())
         return
 
     path = db[user_id]["photos"].get(slot)
-
     if not path or not os.path.exists(path):
-        bot.send_message(message.chat.id, "Photo missing")
+        bot.send_message(message.chat.id, "Photo missing", reply_markup=main_menu())
         return
 
     caption = message.caption or ""
 
-    # user-ne reply
-    with open(path, "rb") as img:
-        bot.send_photo(message.chat.id, img, caption=caption)
+    try:
+        with open(path, "rb") as img:
+            bot.send_photo(message.chat.id, img, caption=caption)
 
-    # multiple channel forward
-    selected_channels = db[user_id].get("selected_channels", [])
+        selected_channels = db[user_id].get("selected_channels", [])
 
-    for ch in selected_channels:
-        if ch in CHANNELS:
-            try:
-                with open(path, "rb") as img:
-                    bot.send_photo(CHANNELS[ch]["chat_id"], img, caption=caption)
-            except Exception as e:
-                bot.send_message(
-                    message.chat.id,
-                    f"{CHANNELS[ch]['name']} error: {e}"
-                )
+        if not selected_channels:
+            bot.send_message(message.chat.id, "No forward channel selected", reply_markup=main_menu())
+            return
+
+        success = []
+        failed = []
+
+        for ch in selected_channels:
+            if ch in CHANNELS:
+                try:
+                    with open(path, "rb") as img:
+                        bot.send_photo(CHANNELS[ch]["chat_id"], img, caption=caption)
+                    success.append(CHANNELS[ch]["name"])
+                except Exception as e:
+                    failed.append(f"{CHANNELS[ch]['name']} - {e}")
+
+        msg = ""
+        if success:
+            msg += "✅ Posted to:\n" + "\n".join(success)
+        if failed:
+            msg += "\n\n❌ Failed:\n" + "\n".join(failed)
+
+        if msg:
+            bot.send_message(message.chat.id, msg, reply_markup=main_menu())
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Replace error: {e}", reply_markup=main_menu())
 
 def run_bot():
     print("Bot running...")
