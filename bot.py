@@ -1,10 +1,14 @@
 import os
 import json
+import threading
 import telebot
 from telebot import types
+from flask import Flask
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
+
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+app = Flask(__name__)
 
 DATA_FILE = "data.json"
 PHOTO_DIR = "photos"
@@ -12,55 +16,43 @@ PHOTO_DIR = "photos"
 if not os.path.exists(PHOTO_DIR):
     os.makedirs(PHOTO_DIR)
 
-# Runtime state
-waiting_for_photo = {}   # {user_id: "photo1"}
-menu_state = {}          # {user_id: "set" or "use"}
+waiting_for_photo = {}
+menu_state = {}
 
-# Persistent state
-# {
-#   "12345": {
-#       "photos": {"photo1": "photos/12345_photo1.jpg", ...},
-#       "active_photo": "photo1"
-#   }
-# }
-user_data = {}
-
+# -------------------- DATA SAVE / LOAD --------------------
 
 def load_data():
-    global user_data
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                user_data = json.load(f)
-        except Exception:
-            user_data = {}
-    else:
-        user_data = {}
+    if not os.path.exists(DATA_FILE):
+        return {}
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-
-def save_data():
+def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2)
 
+db = load_data()
 
-def get_user(user_id):
-    uid = str(user_id)
-    if uid not in user_data:
-        user_data[uid] = {
+def ensure_user(user_id):
+    user_id = str(user_id)
+    if user_id not in db:
+        db[user_id] = {
             "photos": {},
             "active_photo": None
         }
-        save_data()
-    return user_data[uid]
+        save_data(db)
+    return user_id
 
+# -------------------- MENUS --------------------
 
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📸 Set Photo")
     markup.row("✅ Use Photo")
-    markup.row("📂 My Active Photo")
     return markup
-
 
 def photo_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -70,27 +62,42 @@ def photo_menu():
     markup.row("⬅️ Back")
     return markup
 
+# -------------------- FLASK --------------------
 
-@bot.message_handler(commands=['start'])
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+# -------------------- BOT COMMANDS --------------------
+
+@bot.message_handler(commands=["start"])
 def start(message):
+    user_id = ensure_user(message.from_user.id)
+    active = db[user_id].get("active_photo")
+
+    if active:
+        active_text = f"\nCurrent active: {active.upper()}"
+    else:
+        active_text = "\nCurrent active: None"
+
     bot.send_message(
         message.chat.id,
         "✅ Bot Ready\n\n"
         "1. 📸 Set Photo അമർത്തൂ\n"
-        "2. Photo 1 മുതൽ 5 വരെ slot select ചെയ്യൂ\n"
+        "2. Photo 1 മുതൽ 5 വരെ ഒരു slot select ചെയ്യൂ\n"
         "3. ശേഷം photo അയച്ചാൽ save ചെയ്യും\n"
         "4. ✅ Use Photo ഉപയോഗിച്ച് active photo select ചെയ്യൂ\n"
-        "5. ഇനി photo + text + link അയച്ചാൽ photo replace ചെയ്യും\n\n"
-        "🔁 Restart ആയാലും saved photos പോകില്ല",
+        "5. ഇനി photo + text + link അയച്ചാൽ photo replace ചെയ്യും"
+        + active_text,
         reply_markup=main_menu()
     )
 
+# -------------------- TEXT BUTTON HANDLER --------------------
 
 @bot.message_handler(func=lambda m: m.content_type == "text")
 def handle_text(message):
-    user_id = message.from_user.id
+    user_id = ensure_user(message.from_user.id)
     text = message.text.strip()
-    user = get_user(user_id)
 
     if text == "📸 Set Photo":
         menu_state[user_id] = "set"
@@ -108,34 +115,6 @@ def handle_text(message):
             "✅ ഏത് photo active ആക്കണം?",
             reply_markup=photo_menu()
         )
-        return
-
-    if text == "📂 My Active Photo":
-        active = user.get("active_photo")
-        if not active:
-            bot.send_message(
-                message.chat.id,
-                "❌ Active photo set ചെയ്തിട്ടില്ല",
-                reply_markup=main_menu()
-            )
-            return
-
-        photo_path = user["photos"].get(active)
-        if not photo_path or not os.path.exists(photo_path):
-            bot.send_message(
-                message.chat.id,
-                "❌ Active photo file കിട്ടിയില്ല",
-                reply_markup=main_menu()
-            )
-            return
-
-        with open(photo_path, "rb") as img:
-            bot.send_photo(
-                message.chat.id,
-                img,
-                caption=f"✅ Current active: {active.upper()}",
-                reply_markup=main_menu()
-            )
         return
 
     if text == "⬅️ Back":
@@ -162,9 +141,9 @@ def handle_text(message):
             return
 
         if current_mode == "use":
-            if slot in user["photos"] and os.path.exists(user["photos"][slot]):
-                user["active_photo"] = slot
-                save_data()
+            if slot in db[user_id]["photos"]:
+                db[user_id]["active_photo"] = slot
+                save_data(db)
                 bot.send_message(
                     message.chat.id,
                     f"✅ {text} active ആയി set ചെയ്തു",
@@ -185,17 +164,18 @@ def handle_text(message):
         )
         return
 
-    bot.send_message(
-        message.chat.id,
-        "📌 താഴെയുള്ള buttons use ചെയ്യൂ",
-        reply_markup=main_menu()
-    )
+    if not text.startswith("/"):
+        bot.send_message(
+            message.chat.id,
+            "📌 താഴെയുള്ള buttons use ചെയ്യൂ",
+            reply_markup=main_menu()
+        )
 
+# -------------------- PHOTO HANDLER --------------------
 
-@bot.message_handler(content_types=['photo'])
+@bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
+    user_id = ensure_user(message.from_user.id)
 
     # Save mode
     if user_id in waiting_for_photo:
@@ -209,12 +189,12 @@ def handle_photo(message):
             with open(filename, "wb") as f:
                 f.write(downloaded_file)
 
-            user["photos"][slot] = filename
+            db[user_id]["photos"][slot] = filename
 
-            if not user.get("active_photo"):
-                user["active_photo"] = slot
+            if not db[user_id]["active_photo"]:
+                db[user_id]["active_photo"] = slot
 
-            save_data()
+            save_data(db)
             waiting_for_photo.pop(user_id, None)
 
             bot.send_message(
@@ -233,20 +213,22 @@ def handle_photo(message):
             return
 
     # Replace mode
-    active_slot = user.get("active_photo")
+    active_slot = db[user_id].get("active_photo")
+
     if not active_slot:
         bot.send_message(
             message.chat.id,
-            "❌ ആദ്യം ✅ Use Photo ഉപയോഗിച്ച് active photo select ചെയ്യൂ",
+            "❌ ആദ്യം ✅ Use Photo ഉപയോഗിച്ച് photo select ചെയ്യൂ",
             reply_markup=main_menu()
         )
         return
 
-    photo_path = user["photos"].get(active_slot)
+    photo_path = db[user_id]["photos"].get(active_slot)
+
     if not photo_path or not os.path.exists(photo_path):
         bot.send_message(
             message.chat.id,
-            "❌ Active photo കിട്ടിയില്ല",
+            "❌ Active photo കിട്ടിയില്ല. വീണ്ടും set ചെയ്യൂ",
             reply_markup=main_menu()
         )
         return
@@ -256,8 +238,8 @@ def handle_photo(message):
     try:
         with open(photo_path, "rb") as img:
             bot.send_photo(
-                message.chat.id,
-                img,
+                chat_id=message.chat.id,
+                photo=img,
                 caption=caption,
                 reply_markup=main_menu()
             )
@@ -268,7 +250,12 @@ def handle_photo(message):
             reply_markup=main_menu()
         )
 
+# -------------------- BOT RUN --------------------
 
-load_data()
-print("Bot running...")
-bot.infinity_polling(skip_pending=True)
+def run_bot():
+    print("Bot running...")
+    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=20)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
