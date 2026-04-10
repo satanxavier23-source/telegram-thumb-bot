@@ -3,7 +3,7 @@ import json
 import telebot
 from telebot import types
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8747520627:AAGtWhETPQJZdNTBkoEJNf1wh4BkpOwM0os"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 
 DATA_FILE = "data.json"
